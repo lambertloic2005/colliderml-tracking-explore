@@ -2,7 +2,8 @@
 import matplotlib.pyplot as plt
 import mplhep as hep
 import polars as pl
-
+import plotly.graph_objects as go
+import plotly.express as px
 
 def setup_style():
     """Apply ATLAS-style plotting defaults. Call once at notebook start."""
@@ -192,3 +193,152 @@ def bar_hits_by_volume(hits: pl.DataFrame, ax=None):
     ax.set_ylabel("Hit count")
     ax.set_title("Tracker hit occupancy by detector volume")
     return ax
+
+# ---------------- Interactive 3D (plotly) ----------------
+
+def scatter3d_hits(hits: pl.DataFrame, event_id: int,
+                   color_by: str = "volume_id",
+                   marker_size: int = 2,
+                   opacity: float = 0.7,
+                   max_points: int | None = 50_000):
+    """Interactive 3D scatter of all tracker hits in one event (x, y, z).
+
+    Rotate to view from any angle. The ρ-z "side view" is recovered by
+    rotating until the camera looks along the x or y axis.
+    """
+    evt = hits.filter(pl.col("event_id") == event_id)
+    if max_points is not None and evt.height > max_points:
+        evt = evt.sample(n=max_points, seed=0)
+
+    fig = go.Figure(data=[go.Scatter3d(
+        x=evt["x"].to_numpy(),
+        y=evt["y"].to_numpy(),
+        z=evt["z"].to_numpy(),
+        mode="markers",
+        marker=dict(
+            size=marker_size,
+            color=evt[color_by].to_numpy(),
+            colorscale="Viridis",
+            opacity=opacity,
+            colorbar=dict(title=color_by),
+        ),
+        hovertemplate=(
+            "x=%{x:.1f}<br>y=%{y:.1f}<br>z=%{z:.1f}"
+            "<br>" + color_by + f"=%{{marker.color}}"
+            "<extra></extra>"
+        ),
+    )])
+    fig.update_layout(
+        title=f"Event {event_id} — tracker hits (3D, by {color_by})",
+        scene=dict(
+            xaxis_title="x [mm]",
+            yaxis_title="y [mm]",
+            zaxis_title="z [mm]",
+            aspectmode="data",  # don't distort axes
+        ),
+        width=900, height=700,
+        margin=dict(l=0, r=0, b=0, t=40),
+    )
+    return fig
+
+
+def scatter3d_hits_by_particle(hits: pl.DataFrame, event_id: int,
+                               top_n_particles: int = 10,
+                               connect_hits: bool = True):
+    """3D scatter highlighting the top-N particles by hit count.
+
+    Background hits are gray; each highlighted particle gets a distinct color.
+    If connect_hits=True, hits along a particle are sorted by time and
+    drawn as a polyline — approximates the trajectory.
+    """
+    evt = hits.filter(pl.col("event_id") == event_id)
+    top_particles = (
+        evt.group_by("particle_id").len()
+        .sort("len", descending=True)
+        .head(top_n_particles)
+        ["particle_id"].to_list()
+    )
+
+    fig = go.Figure()
+
+    # Background: everything not in top_particles
+    bg = evt.filter(~pl.col("particle_id").is_in(top_particles))
+    fig.add_trace(go.Scatter3d(
+        x=bg["x"].to_numpy(), y=bg["y"].to_numpy(), z=bg["z"].to_numpy(),
+        mode="markers",
+        marker=dict(size=1.5, color="lightgray", opacity=0.3),
+        name="other particles",
+        showlegend=True,
+    ))
+
+    palette = px.colors.qualitative.Plotly  # 10 distinct colors
+    mode = "markers+lines" if connect_hits else "markers"
+    for i, pid in enumerate(top_particles):
+        p_hits = (
+            evt.filter(pl.col("particle_id") == pid)
+            .sort("time")  # chronological → traces the trajectory
+        )
+        fig.add_trace(go.Scatter3d(
+            x=p_hits["x"].to_numpy(),
+            y=p_hits["y"].to_numpy(),
+            z=p_hits["z"].to_numpy(),
+            mode=mode,
+            marker=dict(size=4, color=palette[i % len(palette)]),
+            line=dict(color=palette[i % len(palette)], width=3),
+            name=f"particle {pid} ({p_hits.height} hits)",
+        ))
+
+    fig.update_layout(
+        title=f"Event {event_id} — top {top_n_particles} particles (by hit count)",
+        scene=dict(
+            xaxis_title="x [mm]", yaxis_title="y [mm]", zaxis_title="z [mm]",
+            aspectmode="data",
+        ),
+        width=1000, height=750,
+        margin=dict(l=0, r=0, b=0, t=40),
+    )
+    return fig
+
+
+def scatter3d_rho_z_phi(hits: pl.DataFrame, event_id: int,
+                        color_by: str = "volume_id"):
+    """The ρ-z plot extended to 3D by adding φ as a third axis.
+
+    In this representation:
+      - barrel layers become *cylinders* (constant ρ),
+      - endcap disks become *vertical sheets* (constant z),
+      - tracks become helices that unroll along φ.
+    """
+    evt = hits.filter(pl.col("event_id") == event_id).with_columns(
+        rho=(pl.col("x") ** 2 + pl.col("y") ** 2).sqrt(),
+        phi=pl.arctan2(pl.col("y"), pl.col("x")),
+    )
+
+    fig = go.Figure(data=[go.Scatter3d(
+        x=evt["z"].to_numpy(),
+        y=evt["phi"].to_numpy(),
+        z=evt["rho"].to_numpy(),
+        mode="markers",
+        marker=dict(
+            size=2,
+            color=evt[color_by].to_numpy(),
+            colorscale="Viridis",
+            opacity=0.7,
+            colorbar=dict(title=color_by),
+        ),
+        hovertemplate=(
+            "z=%{x:.1f} mm<br>φ=%{y:.2f} rad<br>ρ=%{z:.1f} mm"
+            "<extra></extra>"
+        ),
+    )])
+    fig.update_layout(
+        title=f"Event {event_id} — cylindrical view (z, φ, ρ)",
+        scene=dict(
+            xaxis_title="z [mm]",
+            yaxis_title="φ [rad]",
+            zaxis_title="ρ [mm]",
+        ),
+        width=900, height=700,
+        margin=dict(l=0, r=0, b=0, t=40),
+    )
+    return fig
