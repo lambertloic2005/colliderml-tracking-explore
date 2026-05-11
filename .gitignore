@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.ipynb_checkpoints/
+
+# uv
+.uv-cache/
+
+# Data — ColliderML shards are huge, never commit
+data/
+*.parquet
+*.root
+*.h5
+
+# Figures — uncomment if you want them tracked
+figures/
+
+# OS / editor cruft
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Secrets
+.env
