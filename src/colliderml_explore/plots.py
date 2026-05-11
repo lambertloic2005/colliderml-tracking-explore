@@ -1,3 +1,121 @@
+"""Reusable plotting helpers for ColliderML tracking exploration."""
+import matplotlib.pyplot as plt
+import mplhep as hep
+import polars as pl
+
+
+def setup_style():
+    """Apply ATLAS-style plotting defaults. Call once at notebook start."""
+    hep.style.use("ATLAS")
+
+
+# ---------------- Particle-level (truth) ----------------
+
+def hist_pt(df: pl.DataFrame, ax=None, label=None, bins=50, pt_max=50.0):
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 5))
+    pt = df["pt"].to_numpy()
+    ax.hist(pt, bins=bins, range=(0, pt_max),
+            histtype="step", linewidth=1.5, label=label)
+    ax.set_xlabel(r"$p_T$ [GeV]")
+    ax.set_ylabel("Count")
+    ax.set_yscale("log")
+    if label:
+        ax.legend()
+    return ax
+
+
+def hist_eta(df: pl.DataFrame, ax=None, label=None, bins=60, eta_max=4.0):
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 5))
+    eta = df["eta"].drop_nulls().to_numpy()
+    ax.hist(eta, bins=bins, range=(-eta_max, eta_max),
+            histtype="step", linewidth=1.5, label=label)
+    ax.set_xlabel(r"$\eta$")
+    ax.set_ylabel("Count")
+    if label:
+        ax.legend()
+    return ax
+
+
+def hist2d_pt_eta(df: pl.DataFrame, ax=None, bins=(60, 50),
+                  pt_max=30.0, eta_max=4.0):
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 5))
+    sub = df.filter(pl.col("eta").is_not_null() & (pl.col("pt") < pt_max))
+    h = ax.hist2d(
+        sub["eta"].to_numpy(), sub["pt"].to_numpy(),
+        bins=bins, range=[[-eta_max, eta_max], [0, pt_max]],
+        cmin=1,
+    )
+    ax.set_xlabel(r"$\eta$")
+    ax.set_ylabel(r"$p_T$ [GeV]")
+    plt.colorbar(h[3], ax=ax, label="Count")
+    return ax
+
+
+def hist_pdg_composition(df: pl.DataFrame, ax=None, top_n=10):
+    if ax is None:
+        _, ax = plt.subplots(figsize=(8, 5))
+    pdg_names = {
+        11: "e", 13: r"$\mu$", 22: r"$\gamma$",
+        211: r"$\pi^\pm$", 321: r"$K^\pm$",
+        2212: "p", 2112: "n",
+        130: r"$K^0_L$", 310: r"$K^0_S$", 111: r"$\pi^0$",
+    }
+    counts = (
+        df.select(pl.col("pdg_id").abs().alias("apdg"))
+        .group_by("apdg").len()
+        .sort("len", descending=True)
+        .head(top_n)
+    )
+    labels = [pdg_names.get(p, str(p)) for p in counts["apdg"].to_list()]
+    ax.bar(labels, counts["len"].to_list())
+    ax.set_ylabel("Count")
+    ax.set_yscale("log")
+    ax.set_title(f"Top {top_n} particle species")
+    return ax
+
+
+# ---------------- Hit-level (detector) ----------------
+
+def scatter_rz(hits: pl.DataFrame, event_id: int, ax=None, color_by="volume_id"):
+    """rho vs z scatter for a single event — *this draws the detector*."""
+    if ax is None:
+        _, ax = plt.subplots(figsize=(11, 5))
+    evt = hits.filter(pl.col("event_id") == event_id).with_columns(
+        rho=(pl.col("x") ** 2 + pl.col("y") ** 2).sqrt(),
+    )
+    sc = ax.scatter(
+        evt["z"].to_numpy(), evt["rho"].to_numpy(),
+        c=evt[color_by].to_numpy(), s=3, cmap="tab10", alpha=0.7,
+    )
+    ax.set_xlabel("z [mm]")
+    ax.set_ylabel(r"$\rho = \sqrt{x^2 + y^2}$ [mm]")
+    ax.set_title(f"Event {event_id} — tracker hits coloured by {color_by}")
+    plt.colorbar(sc, ax=ax, label=color_by)
+    return ax
+
+
+def scatter_xy_barrel(hits: pl.DataFrame, event_id: int,
+                      ax=None, abs_z_max=500.0):
+    """x-y view of barrel hits — shows concentric layers."""
+    if ax is None:
+        _, ax = plt.subplots(figsize=(7, 7))
+    evt = hits.filter(
+        (pl.col("event_id") == event_id) & (pl.col("z").abs() < abs_z_max)
+    )
+    ax.scatter(
+        evt["x"].to_numpy(), evt["y"].to_numpy(),
+        c=evt["layer_id"].to_numpy(), s=5, cmap="tab20", alpha=0.7,
+    )
+    ax.set_xlabel("x [mm]")
+    ax.set_ylabel("y [mm]")
+    ax.set_aspect("equal")
+    ax.set_title(f"Event {event_id} — barrel hits ($|z| < {abs_z_max:.0f}$ mm)")
+    return ax
+
+
 # ---------------- Truth: hits-per-particle and impact parameters ----------------
 
 def hist_num_tracker_hits(df: pl.DataFrame, ax=None, label=None,
